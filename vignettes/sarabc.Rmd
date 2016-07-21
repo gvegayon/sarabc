@@ -1,0 +1,100 @@
+---
+title: "Estimation of Spatial Autoregressive models with Approximate Bayesian Computation"
+author: "George G. Vega Yon"
+date: "`r Sys.Date()`"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Intro to SAR-ABC}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r Setup, echo=FALSE, warning=FALSE, message=FALSE}
+knitr::opts_chunk$set(out.width = '600px', fig.width = 8, fig.height = 5, cache=FALSE)
+
+```
+
+
+# Simulating data
+
+The Data Generating Process (DGP) can be described as follows:
+
+$$
+y = \left(I_n - \rho\mathbf{W}\right)^{-1}\left(\mathbf{X}\beta + \varepsilon\right),\;\varepsilon\sim\mbox{MVN}(0, \sigma^2I_n)
+$$
+
+Where $\mathbf{W}$ is a square matrix of weights, $\mathbf{X}$ is a matrix of covariates, $\rho,\beta$ are the parameters of the model and $\varepsilon$ is a random vector as a single drawn of a MVN. The paraters used for the simulation follow
+
+```{r Parameters}
+# Parameters
+n <- 200
+rho  <- .25
+beta <- -.6
+set.seed(133)
+```
+
+The adjacency matrix $\mathbf{W}$ was simulated as a random graph, in particular, a small-world network using the Watts-Strogatz model as implemented in the R package _netdiffuseR_. The function `sim_sar` is part of the _sarabc_ package
+
+```{r Data simulation}
+library(sarabc)
+
+# Dataset
+W <- netdiffuseR::rgraph_ws(n, 6, .15)
+W <- W/(Matrix::rowSums(W) + 1e-15)
+X <- matrix(rnorm(n*1), ncol=1)
+y <- sim_sar(W, X, rho, beta)
+```
+
+The estimation is done using the function _sar\_abc_ included in the package. We take advantage of the embarrasingly parallelization that can be done in the algorithm so we split the simulation into 4 chunks.
+
+```{r Estimation}
+# Preparing the clusters
+library(parallel)
+cl <- makeCluster(7)
+
+# Running the algorithm and stoping the cluster
+set.seed(123) 
+res <- NULL
+res <- c(sar_abc(y, X, W, cl=cl, N=1e5, keep = 1e3), res)
+stopCluster(cl)
+```
+
+Now we checkout the outputs.
+
+```{r Checking-the-output}
+# Printing
+res
+
+# Neat plots
+oldpar <- par(no.readonly = TRUE)
+par(mfrow=c(1,2))
+hist(res$rho[res$include], main=expression(Distribution~of~rho), xlab="Values",
+     border="transparent", col="gray", breaks = 30, xlim=c(-1,1))
+abline(v=rho, lwd=4, lty=2)
+hist(res$beta[res$include], main=expression(Distribution~of~beta), xlab="Values",
+     border="transparent", col="gray", breaks = 30, xlim=c(-2,2))
+abline(v=beta, lwd=4, lty=2)
+par(oldpar)
+```
+
+As the user can see, at least in means and medians, the algorithm does a good job for this small sample getting very close to the true parameters of the model. Now we compare this algorithm with other implementations in R.
+
+# Comparisons with other algorithms/packages
+
+```{r Comparing with others}
+# Creating dataset
+dat <- data.frame(y,X,Wy = as.vector(W %*% y))
+
+# Comparing with OLS (clearly biased)
+coef(lm(y~0+Wy+X, dat))
+
+# The spdep package
+library(spdep)
+coef(lagsarlm(y~0+X, dat, mat2listw(W), zero.policy = TRUE))
+
+
+# The sphet package
+library(sphet)
+coef(spreg(y~X, dat, listw = mat2listw(W), model = 'lag'))
+```
+
